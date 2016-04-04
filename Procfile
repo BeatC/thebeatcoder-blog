@@ -1,1 +1,1 @@
-web: sudo npm start --production
+web: npm start --production
