@@ -24,7 +24,79 @@ var express     = require('express'),
 
     dbHash;
 
-function initDbHashAndFirstRun() {
+var ServerApp = function (options) {
+    options = options || {};
+
+    return this.init(options);
+};
+
+ServerApp.prototype.configuration = function () {
+    // ##Configuration
+
+    // return the correct mime type for woff files
+    this._setMime();
+    this._enableGzip();
+    this._setViewEngine();
+
+    // ## Middleware and Routing
+    middleware(this.blogApp, this.adminApp);
+
+    this._validateThemes();
+
+    return new GhostServer(this.blogApp);
+};
+
+ServerApp.prototype._setMime = function () {
+    express.static.mime.define({'application/font-woff': ['woff']});
+};
+
+ServerApp.prototype._setViewEngine = function () {
+    var adminHbs = hbs.create();
+
+    // ## View engine
+    // set the view engine
+    this.blogApp.set('view engine', 'hbs');
+
+    // Create a hbs instance for admin and init view engine
+    this.adminApp.set('view engine', 'hbs');
+    this.adminApp.engine('hbs', adminHbs.express3({}));
+
+    // Load helpers
+    helpers.loadCoreHelpers(adminHbs);
+};
+
+ServerApp.prototype._validateThemes = function () {
+    // Log all theme errors and warnings
+    validateThemes(config.paths.themePath)
+        .catch(this._catchThemeValidationErrors.bind(this));
+};
+
+ServerApp.prototype._catchThemeValidationErrors = function (result) {
+    // TODO: change `result` to something better
+    this._logErrors(result.errors);
+    this._logWarnings(result.warnings);
+};
+
+ServerApp.prototype._logErrors = function (errorsCollection) {
+    errorsCollection.forEach(function (err) {
+        errors.logError(err.message, err.context, err.help);
+    });
+};
+
+ServerApp.prototype._logWarnings = function (warningsCollection) {
+    warningsCollection.forEach(function (warn) {
+        errors.logWarn(warn.message, warn.context, warn.help);
+    });
+};
+
+ServerApp.prototype._enableGzip = function () {
+    // enabled gzip compression by default
+    if (config.server.compress !== false) {
+        this.blogApp.use(compress());
+    }
+};
+
+ServerApp.prototype.initDbHashAndFirstRun = function () {
     return api.settings.read({key: 'dbHash', context: {internal: true}}).then(function (response) {
         var hash = response.settings[0].value,
             initHash;
@@ -43,15 +115,15 @@ function initDbHashAndFirstRun() {
 
         return dbHash;
     });
-}
+};
 
 // ## Initialise Ghost
 // Sets up the express server instances, runs init on a bunch of stuff, configures views, helpers, routes and more
 // Finally it returns an instance of GhostServer
-function init(options) {
-    // Get reference to an express app instance.
-    var blogApp = express(),
-        adminApp = express();
+ServerApp.prototype.init = function init(options) {
+    var that = this;
+
+    this._createApps();
 
     // ### Initialisation
     // The server and its dependencies require a populated config
@@ -83,7 +155,7 @@ function init(options) {
     }).then(function () {
         return Promise.join(
             // Check for or initialise a dbHash.
-            initDbHashAndFirstRun(),
+            that.initDbHashAndFirstRun(),
             // Initialize apps
             apps.init(),
             // Initialize sitemaps
@@ -91,48 +163,13 @@ function init(options) {
             // Initialize xmrpc ping
             xmlrpc.init()
         );
-    }).then(function () {
-        var adminHbs = hbs.create();
+    }).then(that.configuration.bind(that));
+};
 
-        // ##Configuration
+ServerApp.prototype._createApps = function () {
+    // Get reference to an express app instance.
+    this.blogApp = express();
+    this.adminApp = express();
+};
 
-        // return the correct mime type for woff files
-        express.static.mime.define({'application/font-woff': ['woff']});
-
-        // enabled gzip compression by default
-        if (config.server.compress !== false) {
-            blogApp.use(compress());
-        }
-
-        // ## View engine
-        // set the view engine
-        blogApp.set('view engine', 'hbs');
-
-        // Create a hbs instance for admin and init view engine
-        adminApp.set('view engine', 'hbs');
-        adminApp.engine('hbs', adminHbs.express3({}));
-
-        // Load helpers
-        helpers.loadCoreHelpers(adminHbs);
-
-        // ## Middleware and Routing
-        middleware(blogApp, adminApp);
-
-        // Log all theme errors and warnings
-        validateThemes(config.paths.themePath)
-            .catch(function (result) {
-                // TODO: change `result` to something better
-                result.errors.forEach(function (err) {
-                    errors.logError(err.message, err.context, err.help);
-                });
-
-                result.warnings.forEach(function (warn) {
-                    errors.logWarn(warn.message, warn.context, warn.help);
-                });
-            });
-
-        return new GhostServer(blogApp);
-    });
-}
-
-module.exports = init;
+module.exports = ServerApp;
